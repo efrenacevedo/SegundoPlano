@@ -57,7 +57,7 @@ class BLEClientManager(private val context: Context) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLEClient", "✅ Conectado al servidor BLE, descubriendo servicios...")
                 this@BLEClientManager.gatt = gatt
-                gatt?.requestMtu(512)
+                gatt?.requestMtu(517)
 
                 onData("connected", "true")
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {

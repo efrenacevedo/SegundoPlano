@@ -1,5 +1,6 @@
 package mx.edu.segundoplano.ui.theme
 
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -28,28 +29,66 @@ import android.util.Log
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.LocationOn
 
 import java.util.*
 import androidx.compose.material3.Text
+import androidx.lifecycle.ViewModelProvider
+import androidx.room.Room
+import mx.edu.segundoplano.util.AppDatabase
+import mx.edu.segundoplano.util.LocalDataRepository
+import mx.edu.segundoplano.util.SensorDataViewModel
+import mx.edu.segundoplano.util.SensorDataViewModelFactory
 import java.io.File
 import java.text.SimpleDateFormat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
+import mx.edu.segundoplano.util.SupabaseService
 
 
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
+
+    val dbs = remember { AppDatabase.getDatabase(context) }
+    val repository = remember {
+        LocalDataRepository(
+            dbs.biometricDataDao(),
+            context = context
+        )
+    }
+    val viewModel: SensorDataViewModel = viewModel(
+        factory = SensorDataViewModelFactory(repository)
+    )
+    val bleClientManager = remember {
+        BLEClientManager(context)
+    }
     val bleManager = remember { BLEClientManager(context) }
     val audioPlayer = remember { AudioPlayer(context) }
 
+    val scope = rememberCoroutineScope()
+    var syncMessage by remember { mutableStateOf<String?>(null) }
+    var isSyncing by remember { mutableStateOf(false) }
+
     var bpm by remember { mutableStateOf("-") }
     var compass by remember { mutableStateOf("-") }
+    var longitude by remember { mutableStateOf("-") }
+    var latitude by remember { mutableStateOf("-") }
     val audios = remember { mutableStateListOf<String>() }
     var connected by remember { mutableStateOf(false) }
     var serverName by remember { mutableStateOf("Desconocido") }
 
+
+
     // Carga inicial de audios
     LaunchedEffect(Unit) {
+
         loadAudioFilesDebug(context, audios)
+        bleClientManager.startScan { type, value ->
+            viewModel.handleBLEData(type, value)
+        }
+
     }
 
     // Actualización del nombre del servidor al conectar
@@ -57,6 +96,13 @@ fun MainScreen() {
         when (type) {
             "bpm" -> bpm = value
             "compass" -> compass = value
+            "location" ->{
+                val parts = value.split(",")
+                if (parts.size == 2){
+                    latitude = parts[0]
+                    longitude = parts[1]
+                }
+            }
             "audio_saved" -> {
                 loadAudioFilesDebug(context, audios)
             }
@@ -65,11 +111,13 @@ fun MainScreen() {
                 if (!connected) {
                     bpm = "-"
                     compass = "-"
+                    latitude = "-"
+                    longitude = "-"
                     serverName = "Desconocido"
                 }
             }
             "device_name" -> {
-                serverName = value
+                serverName = serverName
             }
         }
     }
@@ -107,7 +155,7 @@ fun MainScreen() {
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = "Servidor: $serverName",
+                    text = "Servidor: ${serverName}",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Spacer(Modifier.weight(1f))
@@ -142,15 +190,15 @@ fun MainScreen() {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = "$bpm bpm",
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
                     )
                     Text("Pulso", style = MaterialTheme.typography.bodyMedium)
                 }
                 // Brújula
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Outlined.Face, // puedes cambiar a otro icono si quieres
+                        imageVector = Icons.Outlined.Info, // puedes cambiar a otro icono si quieres
                         contentDescription = "Brújula",
                         tint = Color.Blue,
                         modifier = Modifier.size(48.dp)
@@ -158,10 +206,30 @@ fun MainScreen() {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = compass,
-                        fontSize = 28.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text("Brújula", style = MaterialTheme.typography.bodyMedium)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Outlined.LocationOn, // puedes cambiar a otro icono si quieres
+                        contentDescription = "Localización",
+                        tint = Color.Green,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = longitude,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = latitude,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("Ubicación", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
@@ -238,7 +306,39 @@ fun MainScreen() {
                 }
             )
         }
+
+        Button(
+            onClick = {
+                isSyncing = true
+                scope.launch {
+                    val supabase = SupabaseService(context)
+                    val result = supabase.syncWithSupabase()
+
+                    syncMessage = if (result.success) {
+                        "Sincronizado ${result.recordsSynced} registros"
+                    } else {
+                        "Error: ${result.message}"
+                    }
+                    isSyncing = false
+                }
+            },
+            enabled = !isSyncing
+        ) {
+            if (isSyncing) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Sincronizando...")
+            } else {
+                Text("Sincronizar con Supabase")
+            }
+        }
+
+        syncMessage?.let {
+            Text(it, color = if (it.startsWith("Error")) Color.Red else Color.Green)
+        }
+
     }
+
 }
 
 
